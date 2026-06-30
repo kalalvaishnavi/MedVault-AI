@@ -1,4 +1,5 @@
 import os
+import sys
 import shutil
 import sqlite3
 import csv
@@ -9,6 +10,9 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import logging
+
+# Ensure backend directory is in python path
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logger = logging.getLogger(__name__)
 from pydantic import BaseModel
