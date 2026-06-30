@@ -1,0 +1,1114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MedVault AI — Offline Personal Health Platform</title>
+  <link rel="manifest" href="/manifest.json">
+  <meta name="theme-color" content="#0f172a">
+  
+  <!-- Offline Libraries cached by PWA -->
+  <script src="/static/js/react.production.min.js"></script>
+  <script src="/static/js/react-dom.production.min.js"></script>
+  <script src="/static/js/tailwind.min.js"></script>
+  <script src="/static/js/plotly.min.js"></script>
+  <script src="/static/js/babel.min.js"></script>
+  
+  <style>
+    body {
+      background-color: #0b0f19;
+      color: #f1f5f9;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      overflow-x: hidden;
+    }
+    /* Custom premium styling tokens */
+    .glass-panel {
+      background: rgba(17, 24, 39, 0.7);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      border: 1px solid rgba(255, 255, 255, 0.05);
+    }
+    .glass-card {
+      background: rgba(30, 41, 59, 0.45);
+      backdrop-filter: blur(8px);
+      border: 1px solid rgba(255, 255, 255, 0.03);
+      transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+    .glass-card:hover {
+      transform: translateY(-2px);
+      border-color: rgba(14, 165, 233, 0.2);
+      box-shadow: 0 10px 20px -10px rgba(14, 165, 233, 0.15);
+    }
+    .neon-border-glow:hover {
+      box-shadow: 0 0 15px rgba(14, 165, 233, 0.25);
+    }
+    /* Smooth custom scrollbars */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #0f172a;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #334155;
+      border-radius: 3px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #475569;
+    }
+    /* Animations */
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(8px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .animate-fade-in {
+      animation: fadeIn 0.4s ease-out forwards;
+    }
+  </style>
+</head>
+<body class="antialiased">
+  <div id="root"></div>
+
+  <script type="text/babel">
+    const { useState, useEffect, useRef } = React;
+
+    function App() {
+      const [currentTab, setCurrentTab] = useState('dashboard');
+      const [reports, setReports] = useState([]);
+      const [patients, setPatients] = useState([]);
+      const [selectedPatientId, setSelectedPatientId] = useState('');
+      const [selectedReport, setSelectedReport] = useState(null);
+      const [reportSummary, setReportSummary] = useState(null);
+      const [loadingSummary, setLoadingSummary] = useState(false);
+      const [searchQuery, setSearchQuery] = useState('');
+      const [searchResults, setSearchResults] = useState({ keyword_results: [], semantic_results: [] });
+      const [searching, setSearching] = useState(false);
+      const [trendData, setTrendData] = useState([]);
+      const [selectedTrendMetric, setSelectedTrendMetric] = useState('Glucose');
+      const [uploadStatus, setUploadStatus] = useState(null);
+      const [errorBoundary, setErrorBoundary] = useState(null);
+      const [dashboardStats, setDashboardStats] = useState({ 
+        health_score: 100, 
+        abnormal_count: 0, 
+        risk_level: 'Normal', 
+        total_reports: 0,
+        latest_report_date: 'N/A',
+        category_stats: {}
+      });
+      const [trendSummary, setTrendSummary] = useState(null);
+      const [availableMetrics, setAvailableMetrics] = useState([]);
+      const [loadingStats, setLoadingStats] = useState(false);
+
+      // Search Suggested Chips
+      const searchChips = [
+        "Show my low hemoglobin reports",
+        "Find reports with high cholesterol",
+        "Compare my glucose over time",
+        "Show latest CBC report",
+        "List abnormal kidney tests"
+      ];
+      
+      useEffect(() => {
+        loadReports();
+        loadPatients();
+        
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.register('/sw.js').catch(err => console.log('SW register failed:', err));
+        }
+      }, []);
+
+      useEffect(() => {
+        if (selectedPatientId) {
+          loadMetrics(selectedPatientId);
+          loadDashboardStats(selectedPatientId);
+        }
+      }, [selectedPatientId]);
+
+      const loadPatients = async () => {
+        try {
+          const res = await fetch('http://localhost:8000/api/patients');
+          if (!res.ok) throw new Error('API Error');
+          const data = await res.json();
+          setPatients(Array.isArray(data) ? data : []);
+          if (data && data.length > 0) {
+            const arjun = data.find(p => p.name.includes("Arjun Mehta"));
+            const initialId = arjun ? arjun.id : data[0].id;
+            setSelectedPatientId(initialId.toString());
+          }
+        } catch (e) {
+          console.error("Failed to load patients list", e);
+        }
+      };
+
+      const loadDashboardStats = async (pId) => {
+        setLoadingStats(true);
+        try {
+          const res = await fetch(`/api/dashboard-stats?patient_id=${pId || ''}`);
+          const data = await res.json();
+          setDashboardStats(data);
+        } catch (e) {
+          console.error("Failed to load dashboard stats", e);
+        } finally {
+          setLoadingStats(false);
+        }
+      };
+ 
+      const loadReports = async () => {
+        try {
+          const res = await fetch('http://localhost:8000/api/reports');
+          const data = await res.json();
+          setReports(data);
+        } catch (e) {
+          setErrorBoundary("Failed to load reports from local backend.");
+        }
+      };
+ 
+      const loadMetrics = async (patientId) => {
+        try {
+          const res = await fetch(`/api/tests/unique?patient_id=${patientId || ''}`);
+          const data = await res.json();
+          if (data && data.length > 0) {
+            setAvailableMetrics(data);
+            const defaultMetric = data.includes(selectedTrendMetric) ? selectedTrendMetric : data[0];
+            setSelectedTrendMetric(defaultMetric);
+            loadTrendData(defaultMetric, patientId);
+          } else {
+            setAvailableMetrics([]);
+            setTrendData([]);
+            const chartDiv = document.getElementById('trends-chart');
+            if (chartDiv) Plotly.purge(chartDiv);
+            setTrendSummary(null);
+          }
+        } catch (e) {
+          console.error("Failed to load metrics", e);
+        }
+      };
+ 
+      const loadTrendData = async (metric, patientId) => {
+        const pId = patientId || selectedPatientId;
+        try {
+          const res = await fetch(`/api/trends?test_name=${encodeURIComponent(metric)}&patient_id=${pId || ''}`);
+          const data = await res.json();
+          setTrendData(data);
+          renderPlotlyChart(data, metric);
+        } catch (e) {
+          console.error("Failed to load trend data", e);
+        }
+      };
+ 
+      const handleUpload = async (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        setUploadStatus({ status: 'uploading', message: 'Analyzing medical report offline (OCR + LLM Extraction)...' });
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        try {
+          const res = await fetch('http://localhost:8000/api/upload', {
+            method: 'POST',
+            body: formData
+          });
+          const data = await res.json();
+          if (res.ok) {
+            setUploadStatus({ status: 'success', message: 'Report processed and stored successfully!' });
+            loadReports();
+            loadPatients();
+            if (data && data.patient_id) {
+              const newPid = data.patient_id.toString();
+              setSelectedPatientId(newPid);
+              loadDashboardStats(newPid);
+              loadMetrics(newPid);
+            } else if (selectedPatientId) {
+              loadDashboardStats(selectedPatientId);
+              loadMetrics(selectedPatientId);
+            }
+          } else {
+            setUploadStatus({ status: 'error', message: data.detail || 'Processing failed.' });
+          }
+        } catch (err) {
+          setUploadStatus({ status: 'error', message: 'Backend connection lost.' });
+        }
+      };
+ 
+      const handleSearch = async (e, forcedQuery = null) => {
+        if (e) e.preventDefault();
+        const activeQuery = forcedQuery !== null ? forcedQuery : searchQuery;
+        if (!activeQuery) return;
+        
+        setSearching(true);
+        try {
+          const res = await fetch(`/api/search?q=${encodeURIComponent(activeQuery)}`);
+          const data = await res.json();
+          setSearchResults(data);
+        } catch (err) {
+          console.error("Search failed", err);
+        } finally {
+          setSearching(false);
+        }
+      };
+ 
+      const loadReportDetail = async (id) => {
+        setLoadingSummary(true);
+        setSelectedReport(null);
+        setReportSummary(null);
+        try {
+          const res = await fetch(`/api/reports/${id}`);
+          const data = await res.json();
+          setSelectedReport(data);
+          
+          // Fetch report summary
+          const summaryRes = await fetch(`/api/reports/${id}/summary`);
+          if (summaryRes.ok) {
+            const sData = await summaryRes.json();
+            setReportSummary(sData);
+          }
+        } catch (e) {
+          console.error(e);
+        } finally {
+          setLoadingSummary(false);
+        }
+      };
+ 
+      const handleExport = async (format) => {
+        try {
+          window.open(`/api/export?format=${format}`);
+        } catch (e) {
+          console.error("Export failed", e);
+        }
+      };
+ 
+      const generateTrendSummary = (data, metricName) => {
+        if (data.length === 0) return null;
+        if (data.length === 1) {
+           return {
+             type: 'single',
+             text: `Upload more reports to visualize trends.`,
+             current_value: data[0].value,
+             unit: data[0].unit || '',
+             range: `${data[0].reference_range_low || '0'} - ${data[0].reference_range_high || '100'}`,
+             status: data[0].flag === 'normal' ? 'Normal' : (data[0].flag === 'high' ? 'High' : 'Low'),
+             date: data[0].report_date
+           };
+        }
+        
+        const latestVal = parseFloat(data[data.length - 1].value);
+        const previousVal = parseFloat(data[data.length - 2].value);
+        const unit = data[data.length - 1].unit || '';
+        
+        const latestFlag = data[data.length - 1].flag;
+        const lowBound = data[data.length - 1].reference_range_low;
+        const highBound = data[data.length - 1].reference_range_high;
+
+        let changeText = "remained stable";
+        let trendType = "stable";
+        let arrow = "→";
+        
+        if (latestVal > previousVal) {
+          const pct = (((latestVal - previousVal) / previousVal) * 100).toFixed(1);
+          changeText = `increased by ${pct}% from ${previousVal} ${unit} to ${latestVal} ${unit}`;
+          trendType = "increasing";
+          arrow = "↗";
+        } else if (latestVal < previousVal) {
+          const pct = (((previousVal - latestVal) / previousVal) * 100).toFixed(1);
+          changeText = `decreased by ${pct}% from ${previousVal} ${unit} to ${latestVal} ${unit}`;
+          trendType = "decreasing";
+          arrow = "↘";
+        }
+
+        let aiInsight = "";
+        const mLower = metricName.toLowerCase();
+        if (mLower.includes("glucose")) {
+          if (latestVal > 125) aiInsight = " Current glycemic levels indicate active hyperglycemia. Clinical attention and glucose monitoring recommended.";
+          else if (latestVal > 100) aiInsight = " Borderline glucose level suggests pre-diabetes status. Diet controls recommended.";
+          else aiInsight = " Glycemic control is stable and within normal homeostatic limits.";
+        } else if (mLower.includes("hemoglobin")) {
+          if (latestVal < 12.0) aiInsight = " Anemic tendency identified. Iron-rich nutrition, serum ferritin monitoring, or supplementation recommended.";
+          else aiInsight = " Hemoglobin levels are healthy and stable.";
+        } else if (mLower.includes("cholesterol")) {
+          if (latestVal > 200) aiInsight = " Elevated lipid profile. Consider low-fat diet modifications and daily cardiovascular exercises.";
+          else aiInsight = " Lipid profile is optimal and within cardioprotective range.";
+        } else if (mLower.includes("vitamin d")) {
+          if (latestVal < 30) aiInsight = " Vitamin D insufficiency detected. Supplementation support under supervision is advisable.";
+          else aiInsight = " Vitamin D levels are satisfactory for skeletal and immune health.";
+        } else if (mLower.includes("creatinine")) {
+          if (latestVal > 1.2) aiInsight = " Marginally elevated creatinine. Ensure adequate hydration and check renal status.";
+          else aiInsight = " Renal clearance indicator is within stable physiological limits.";
+        } else {
+          if (latestFlag !== "normal") {
+            aiInsight = ` Elevated or abnormal levels of ${metricName} found. Check flags and reference ranges.`;
+          } else {
+            aiInsight = ` Levels of ${metricName} are healthy and well-managed.`;
+          }
+        }
+
+        return {
+          type: 'multiple',
+          text: `Overall ${metricName} has ${changeText} over the last ${data.length} records. Currently, the value of ${latestVal} ${unit} is ${latestFlag === 'normal' ? 'within' : 'outside'} the healthy reference range (${lowBound}-${highBound}).`,
+          trendType: trendType,
+          arrow: arrow,
+          aiInsight: aiInsight
+        };
+      };
+ 
+      const renderPlotlyChart = (data, metricName) => {
+        const chartDiv = document.getElementById('trends-chart');
+        if (!chartDiv) return;
+        
+        const summary = generateTrendSummary(data, metricName);
+        setTrendSummary(summary);
+        
+        if (!data || data.length === 0) {
+          Plotly.purge(chartDiv);
+          chartDiv.innerHTML = `<div class="text-slate-400 text-center py-10">No data points for metric: ${metricName}</div>`;
+          return;
+        }
+
+        if (data.length === 1) {
+          Plotly.purge(chartDiv);
+          chartDiv.innerHTML = `<div class="text-slate-400 text-center py-16 flex flex-col items-center justify-center gap-3">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-10 w-10 text-amber-500 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+            </svg>
+            <div class="text-lg font-semibold text-slate-300">Upload more reports to visualize trends.</div>
+            <div class="text-xs text-slate-500">Need at least 2 data points for timeline tracking.</div>
+          </div>`;
+          return;
+        }
+ 
+        const dates = data.map(d => d.report_date || 'N/A');
+        const values = data.map(d => parseFloat(d.value));
+        const hoverTexts = data.map(d => {
+          const stat = d.flag === 'normal' ? 'Normal' : (d.flag === 'high' ? 'High' : 'Low');
+          return `<b>Date:</b> ${d.report_date}<br><b>Value:</b> ${d.value} ${d.unit||''}<br><b>Reference Range:</b> ${d.reference_range_low || '0'} - ${d.reference_range_high || '100'}<br><b>Status:</b> ${stat}`;
+        });
+        
+        const colors = data.map(d => d.flag === 'normal' ? '#10b981' : '#f43f5e');
+        const lineShape = 'spline';
+ 
+        const minVal = Math.min(...values);
+        const maxVal = Math.max(...values);
+        const yMargin = (maxVal - minVal) * 0.15 || 5.0;
+        const yMin = Math.max(0, minVal - yMargin);
+        const yMax = maxVal + yMargin;
+
+        let refLow = data[0]?.reference_range_low;
+        let refHigh = data[0]?.reference_range_high;
+        if (refLow === undefined || refLow === null) refLow = 0.0;
+        if (refHigh === undefined || refHigh === null) refHigh = 100.0;
+ 
+        const trace = {
+          x: dates,
+          y: values,
+          type: 'scatter',
+          mode: 'lines+markers',
+          name: metricName,
+          line: { color: '#0ea5e9', width: 3.5, shape: lineShape },
+          marker: { size: 12, color: colors, line: {color: '#1e293b', width: 2.5} },
+          hoverinfo: 'text',
+          hovertext: hoverTexts,
+          customdata: data.map(d => d.report_id)
+        };
+ 
+        const layout = {
+          paper_bgcolor: 'rgba(0,0,0,0)',
+          plot_bgcolor: 'rgba(0,0,0,0)',
+          font: { color: '#cbd5e1', family: 'ui-sans-serif, system-ui' },
+          margin: { t: 20, r: 20, l: 55, b: 40 },
+          xaxis: { 
+            gridcolor: '#1e293b', 
+            showline: true, 
+            linecolor: '#334155',
+            tickfont: { size: 11, color: '#94a3b8' }
+          },
+          yaxis: { 
+            gridcolor: '#1e293b', 
+            range: [yMin, yMax], 
+            zeroline: false, 
+            tickfont: { size: 11, color: '#94a3b8' }
+          },
+          hovermode: 'closest',
+          shapes: [
+            {
+              type: 'rect',
+              xref: 'paper',
+              yref: 'y',
+              x0: 0,
+              x1: 1,
+              y0: refLow,
+              y1: refHigh,
+              fillcolor: 'rgba(16, 185, 129, 0.06)',
+              line: { width: 0 },
+              layer: 'below'
+            }
+          ]
+        };
+ 
+        const config = { responsive: true, displayModeBar: false };
+        Plotly.newPlot(chartDiv, [trace], layout, config);
+ 
+        chartDiv.on('plotly_click', function(data){
+          if(data.points.length > 0) {
+            const reportId = data.points[0].customdata;
+            if(reportId) {
+               loadReportDetail(reportId);
+            }
+          }
+        });
+      };
+
+      return (
+        <div className="min-h-screen flex flex-col md:flex-row bg-[#080d19]">
+          {/* Sidebar */}
+          <aside className="w-full md:w-64 bg-[#0d1527] border-b md:border-b-0 md:border-r border-slate-800/60 p-6 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center gap-3 mb-8">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-sky-500 to-indigo-600 flex items-center justify-center font-black text-white shadow-lg shadow-sky-500/20">MV</div>
+                <div>
+                  <h1 className="text-lg font-bold tracking-tight text-white leading-none">MedVault AI</h1>
+                  <span className="text-[10px] text-sky-400 font-semibold tracking-wider uppercase">Offline Intelligence</span>
+                </div>
+              </div>
+              
+              <div className="mb-6">
+                <label className="text-[10px] uppercase font-bold tracking-wider text-slate-500 block mb-1">Select Patient Profile</label>
+                <select
+                  value={selectedPatientId}
+                  onChange={(e) => setSelectedPatientId(e.target.value)}
+                  className="w-full bg-[#162238] border border-slate-700/60 text-white rounded-lg px-3 py-2 focus:outline-none focus:border-sky-500 text-sm font-semibold transition-all">
+                  {patients.map(p => (
+                    <option key={p.id} value={p.id}>{p.name}</option>
+                  ))}
+                </select>
+              </div>
+
+              <nav className="space-y-1">
+                {[
+                  { id: 'dashboard', label: 'Dashboard', icon: 'M4 5a1 1 0 011-1h4a1 1 0 011 1v6a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm12 0a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1h-4a1 1 0 01-1-1V5zM4 17a1 1 0 011-1h4a1 1 0 011 1v2a1 1 0 01-1 1H5a1 1 0 01-1-1v-2zm12-5a1 1 0 011-1h4a1 1 0 011 1v6a1 1 0 01-1 1h-4a1 1 0 01-1-1v-6z' },
+                  { id: 'trends', label: 'Health Timeline', icon: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 002 2h2a2 2 0 002-2' },
+                  { id: 'search', label: 'Semantic Search', icon: 'M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z' },
+                  { id: 'export', label: 'Backup & Export', icon: 'M8 4H6a2 2 0 00-2 2v12a2 2 0 002 2h12a2 2 0 002-2V6a2 2 0 00-2-2h-2m-4-1v8m0 0l3-3m-3 3L9 8m-5 5h2.586a1 1 0 01.707.293l2.414 2.414a1 1 0 00.707.293h3.172a1 1 0 00.707-.293l2.414-2.414a1 1 0 01.707-.293H20' }
+                ].map(item => (
+                  <button 
+                    key={item.id}
+                    onClick={() => {
+                      setCurrentTab(item.id);
+                      if (item.id === 'trends' && selectedTrendMetric) {
+                        setTimeout(() => loadTrendData(selectedTrendMetric), 50);
+                      }
+                    }}
+                    className={`w-full text-left px-4 py-3 rounded-xl flex items-center gap-3 font-semibold text-sm transition-all duration-200 ${
+                      currentTab === item.id 
+                        ? 'bg-gradient-to-r from-sky-600/90 to-indigo-600/90 text-white shadow-md shadow-sky-500/10' 
+                        : 'text-slate-400 hover:bg-slate-800/40 hover:text-white'
+                    }`}>
+                    <svg className="w-5 h-5 opacity-80" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d={item.icon} />
+                    </svg>
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </nav>
+            </div>
+            
+            <div className="pt-6 border-t border-slate-800/60 text-xs text-slate-500 space-y-1">
+              <div className="flex items-center gap-1.5 text-emerald-400 font-semibold">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-ping"></span>
+                <span>🔒 100% Offline Enabled</span>
+              </div>
+              <p>Active Engine: Sentence-Transformers</p>
+            </div>
+          </aside>
+
+          {/* Main Panel */}
+          <main className="flex-1 p-6 md:p-8 overflow-y-auto max-h-screen">
+            {errorBoundary && (
+              <div className="bg-red-950/40 border border-red-500/50 text-red-200 p-4 rounded-xl mb-6 flex items-center gap-3">
+                <svg className="w-6 h-6 text-red-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+                <span>{errorBoundary}</span>
+              </div>
+            )}
+
+            {/* Dashboard Tab */}
+            {currentTab === 'dashboard' && (
+              <div className="space-y-8 animate-fade-in">
+                <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div>
+                    <h2 className="text-3xl font-extrabold text-white tracking-tight">Clinical Dashboard</h2>
+                    <p className="text-slate-400 mt-1">Real-time local statistics, alerts, and vital medical breakdowns</p>
+                  </div>
+                  <div>
+                    <label className="bg-gradient-to-tr from-sky-500 to-indigo-600 hover:from-sky-600 hover:to-indigo-700 text-white px-5 py-2.5 rounded-xl cursor-pointer font-bold transition-all shadow-lg shadow-sky-500/10 flex items-center gap-2 neon-border-glow">
+                      <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12" />
+                      </svg>
+                      <span>Upload Medical Report</span>
+                      <input type="file" onChange={handleUpload} className="hidden" accept=".pdf,.png,.jpg,.jpeg" />
+                    </label>
+                  </div>
+                </header>
+
+                {uploadStatus && (
+                  <div className={`p-4 rounded-xl border animate-fade-in flex items-center gap-3 ${
+                    uploadStatus.status === 'uploading' 
+                      ? 'bg-sky-950/20 border-sky-500/30 text-sky-200' 
+                      : uploadStatus.status === 'success' 
+                        ? 'bg-emerald-950/20 border-emerald-500/30 text-emerald-200' 
+                        : 'bg-rose-950/20 border-rose-500/30 text-rose-200'
+                  }`}>
+                    {uploadStatus.status === 'uploading' && <span className="w-4 h-4 border-2 border-sky-400 border-t-transparent rounded-full animate-spin"></span>}
+                    <span>{uploadStatus.message}</span>
+                  </div>
+                )}
+
+                {/* Statistics Cards */}
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+                  {/* Health Score Card */}
+                  <div className="glass-card rounded-2xl p-6 relative overflow-hidden flex flex-col justify-between min-h-[140px]">
+                    <div>
+                      <h3 className="text-slate-400 text-xs font-bold uppercase tracking-wider">Overall Health Score</h3>
+                      <div className="flex items-baseline gap-1 mt-2">
+                        <span className="text-4xl font-extrabold text-sky-400">{dashboardStats.health_score}</span>
+                        <span className="text-slate-500 text-sm font-semibold">/ 100</span>
+                      </div>
+                    </div>
+                    <div className="w-full bg-slate-800/80 rounded-full h-2 mt-4 overflow-hidden">
+                      <div className="bg-sky-400 h-full rounded-full transition-all duration-500" style={{ width: `${dashboardStats.health_score}%` }}></div>
+                    </div>
+                  </div>
+
+                  {/* Total Reports */}
+                  <div className="glass-card rounded-2xl p-6 min-h-[140px] flex flex-col justify-between">
+                    <div>
+                      <h3 className="text-slate-400 text-xs font-bold uppercase tracking-wider">Total Reports</h3>
+                      <span className="text-4xl font-extrabold text-white mt-2 block">{dashboardStats.total_reports}</span>
+                    </div>
+                    <div className="text-xs text-slate-500 flex items-center gap-1">
+                      <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <span>Stored locally in SQLite</span>
+                    </div>
+                  </div>
+
+                  {/* Abnormal Parameters */}
+                  <div className="glass-card rounded-2xl p-6 min-h-[140px] flex flex-col justify-between">
+                    <div>
+                      <h3 className="text-slate-400 text-xs font-bold uppercase tracking-wider">Abnormal Indicators</h3>
+                      <span className="text-4xl font-extrabold text-rose-500 mt-2 block">{dashboardStats.abnormal_count}</span>
+                    </div>
+                    <div className="text-xs text-slate-500 flex items-center gap-1">
+                      <span className="w-2.5 h-2.5 rounded-full bg-rose-500/20 border border-rose-500 flex items-center justify-center"><span className="w-1 h-1 rounded-full bg-rose-500"></span></span>
+                      <span>Requires medical supervision</span>
+                    </div>
+                  </div>
+
+                  {/* Latest Report Date */}
+                  <div className="glass-card rounded-2xl p-6 min-h-[140px] flex flex-col justify-between">
+                    <div>
+                      <h3 className="text-slate-400 text-xs font-bold uppercase tracking-wider">Latest Report Date</h3>
+                      <span className="text-2xl font-bold text-white mt-3 block truncate">{dashboardStats.latest_report_date}</span>
+                    </div>
+                    <span className={`text-[10px] font-bold uppercase py-0.5 px-2 rounded-md self-start ${
+                      dashboardStats.risk_level === 'Normal' ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-900/60' :
+                      dashboardStats.risk_level === 'Elevated' ? 'bg-amber-950/60 text-amber-400 border border-amber-900/60' :
+                      'bg-rose-950/60 text-rose-400 border border-rose-900/60'
+                    }`}>
+                      Risk level: {dashboardStats.risk_level}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Dashboard Grid Row 2 */}
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  {/* Recent reports list */}
+                  <div className="glass-panel rounded-2xl p-6 lg:col-span-2 border border-slate-800/40">
+                    <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                      <svg className="w-5 h-5 text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span>Recent Medical Reports</span>
+                    </h3>
+                    {reports.length === 0 ? (
+                      <div className="text-slate-500 py-10 text-center flex flex-col items-center justify-center">
+                        <svg className="w-12 h-12 text-slate-700 mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1} d="M9 13h6m-6-3h6m-3-9v4m-9 2h18v12a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
+                        </svg>
+                        <p>No medical reports uploaded yet.</p>
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-left border-collapse text-sm">
+                          <thead>
+                            <tr className="border-b border-slate-800/80 text-slate-500 font-bold">
+                              <th className="pb-3">Date</th>
+                              <th className="pb-3">Patient</th>
+                              <th className="pb-3">Type</th>
+                              <th className="pb-3">Facility / Practitioner</th>
+                              <th className="pb-3 text-right">Actions</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {reports.slice(0, 5).map(r => (
+                              <tr key={r.id} className="border-b border-slate-800/40 hover:bg-slate-800/20 transition-all">
+                                <td className="py-3.5 text-slate-300 font-semibold">{r.report_date || 'N/A'}</td>
+                                <td className="py-3.5 font-bold text-white">{r.patient_name}</td>
+                                <td className="py-3.5">
+                                  <span className="px-2 py-0.5 rounded-md bg-[#162238] text-sky-400 text-[10px] font-bold uppercase tracking-wider border border-sky-950">
+                                    {r.report_type}
+                                  </span>
+                                </td>
+                                <td className="py-3.5 text-slate-400 max-w-[150px] truncate">{r.hospital || r.doctor || 'N/A'}</td>
+                                <td className="py-3.5 text-right">
+                                  <button 
+                                    onClick={() => loadReportDetail(r.id)} 
+                                    className="text-sky-400 hover:text-sky-300 font-bold transition-all hover:underline text-xs flex items-center gap-1 ml-auto">
+                                    <span>Analyze</span>
+                                    <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                                    </svg>
+                                  </button>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Quick statistics by category */}
+                  <div className="glass-panel rounded-2xl p-6 border border-slate-800/40 flex flex-col justify-between">
+                    <div>
+                      <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                        <svg className="w-5 h-5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M11 3.055A9.001 9.001 0 1020.945 13H11V3.055z" />
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.488 9H15V3.512A9.025 9.025 0 0120.488 9z" />
+                        </svg>
+                        <span>Parameter Breakdown</span>
+                      </h3>
+                      <div className="space-y-4">
+                        {[
+                          { key: 'blood', label: 'Hematology (CBC)', color: 'bg-rose-500' },
+                          { key: 'glucose', label: 'Glycemic Controls', color: 'bg-emerald-500' },
+                          { key: 'lipid', label: 'Cardiovascular Lipids', color: 'bg-amber-500' },
+                          { key: 'kidney', label: 'Renal / Kidney Profile', color: 'bg-sky-500' },
+                          { key: 'general', label: 'Other Diagnostics', color: 'bg-indigo-500' }
+                        ].map(item => {
+                          const count = dashboardStats.category_stats[item.key] || 0;
+                          return (
+                            <div key={item.key} className="space-y-1">
+                              <div className="flex justify-between text-xs font-semibold">
+                                <span className="text-slate-400">{item.label}</span>
+                                <span className="text-white">{count} parameters</span>
+                              </div>
+                              <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                                <div className={`${item.color} h-full rounded-full`} style={{ width: `${Math.min(100, (count / Math.max(1, dashboardStats.abnormal_count + 10)) * 100)}%` }}></div>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div className="mt-6 p-3 rounded-xl bg-indigo-950/20 border border-indigo-900/40 text-[11px] text-slate-400 leading-relaxed">
+                      💡 <b>Pro Tip:</b> Switch tabs using the sidebar to view full diagnostic timelines or search using natural language models offline.
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Health Timeline Tab */}
+            {currentTab === 'trends' && (
+              <div className="space-y-8 animate-fade-in">
+                <header className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
+                  <div>
+                    <h2 className="text-3xl font-extrabold text-white tracking-tight">Physiological Timeline</h2>
+                    <p className="text-slate-400 mt-1">Cross-compare lab results, check healthy corridors, and analyze metrics</p>
+                  </div>
+                </header>
+
+                <div className="flex flex-wrap gap-2 max-w-4xl">
+                  {availableMetrics.length === 0 ? (
+                    <div className="text-slate-500 text-sm py-2">No diagnostic metrics registered yet. Upload reports first.</div>
+                  ) : (
+                    availableMetrics.map(metric => (
+                      <button
+                        key={metric}
+                        onClick={() => { setSelectedTrendMetric(metric); loadTrendData(metric); }}
+                        className={`px-4 py-2 text-xs rounded-xl font-bold transition-all duration-200 ${
+                          selectedTrendMetric === metric 
+                            ? 'bg-gradient-to-r from-sky-500 to-indigo-600 text-white shadow-md shadow-sky-500/10' 
+                            : 'bg-[#162238] text-slate-300 hover:bg-slate-800 border border-slate-700/60'
+                        }`}>
+                        {metric}
+                      </button>
+                    ))
+                  )}
+                </div>
+
+                <div className="glass-panel rounded-2xl p-6 border border-slate-800/40">
+                  {/* Legend */}
+                  <div className="flex items-center justify-between mb-6">
+                    <h3 className="font-bold text-white text-base flex items-center gap-2">
+                      <svg className="w-5 h-5 text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 12l3-3 3 3 4-4M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+                      </svg>
+                      <span>{selectedTrendMetric} Progression</span>
+                    </h3>
+                    <div className="flex items-center gap-4 text-xs font-semibold">
+                      <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-emerald-500"></span> Normal</div>
+                      <div className="flex items-center gap-1.5"><span className="w-2.5 h-2.5 rounded-full bg-rose-500"></span> Abnormal</div>
+                      <div className="flex items-center gap-1.5"><span className="w-4 h-3 rounded bg-emerald-500/10 border border-emerald-500/20"></span> Shaded Reference Range</div>
+                    </div>
+                  </div>
+                  
+                  <div id="trends-chart" className="w-full h-96"></div>
+                  
+                  {/* Insight Summary Block */}
+                  {trendSummary && (
+                    <div className="mt-6 p-5 rounded-xl bg-slate-800/30 border border-slate-800/80 animate-fade-in">
+                      <div className="flex items-start gap-4">
+                        <div className="w-10 h-10 rounded-xl bg-sky-500/10 border border-sky-500/20 flex items-center justify-center text-sky-400 shrink-0">
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                            <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+                          </svg>
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-3 mb-1">
+                            <h4 className="text-sm font-bold text-slate-200">Timeline Analysis</h4>
+                            {trendSummary.arrow && (
+                              <span className={`px-2 py-0.5 rounded-md text-[10px] font-bold ${
+                                trendSummary.trendType === 'increasing' ? 'bg-emerald-950 text-emerald-400 border border-emerald-900/60' :
+                                trendSummary.trendType === 'decreasing' ? 'bg-amber-950 text-amber-400 border border-amber-900/60' :
+                                'bg-slate-950 text-slate-400 border border-slate-900/60'
+                              }`}>{trendSummary.arrow} {trendSummary.trendType.toUpperCase()}</span>
+                            )}
+                          </div>
+                          
+                          {trendSummary.type === 'multiple' ? (
+                            <div className="space-y-3">
+                              <p className="text-sm text-slate-300 leading-relaxed">{trendSummary.text}</p>
+                              {trendSummary.aiInsight && (
+                                <div className="text-xs bg-[#0d1527] p-3 rounded-lg border border-slate-800/80 text-slate-300 leading-relaxed">
+                                  <span className="font-bold text-sky-400 block mb-1">🤖 Clinical Rule Assessment:</span>
+                                  {trendSummary.aiInsight}
+                                </div>
+                              )}
+                            </div>
+                          ) : (
+                            <div>
+                              <p className="text-sm text-slate-400 mb-2">{trendSummary.text}</p>
+                              <div className="flex gap-4 text-xs text-slate-400 bg-slate-900/50 p-2.5 rounded-lg border border-slate-800/60 max-w-md">
+                                <div><strong>Current:</strong> {trendSummary.current_value} {trendSummary.unit}</div>
+                                <div><strong>Reference Range:</strong> {trendSummary.range}</div>
+                                <div><strong>Status:</strong> <span className={trendSummary.status === 'Normal' ? 'text-emerald-400 font-semibold' : 'text-rose-400 font-semibold'}>{trendSummary.status}</span></div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Semantic Search Tab */}
+            {currentTab === 'search' && (
+              <div className="space-y-8 animate-fade-in">
+                <header className="mb-6">
+                  <h2 className="text-3xl font-extrabold text-white tracking-tight">Semantic Query Engine</h2>
+                  <p className="text-slate-400 mt-1">Ask questions using natural language. Query matches are calculated instantly offline.</p>
+                </header>
+
+                {/* Suggested Chips */}
+                <div className="flex flex-wrap gap-2 mb-4">
+                  {searchChips.map((chip, idx) => (
+                    <button
+                      key={idx}
+                      onClick={() => {
+                        setSearchQuery(chip);
+                        handleSearch(null, chip);
+                      }}
+                      className="text-xs font-semibold px-3.5 py-2 bg-slate-900 hover:bg-[#162238] text-slate-300 hover:text-white rounded-xl border border-slate-800/80 transition-all">
+                      {chip}
+                    </button>
+                  ))}
+                </div>
+
+                <form onSubmit={handleSearch} className="flex gap-3 max-w-4xl">
+                  <div className="relative flex-1">
+                    <input
+                      type="text"
+                      value={searchQuery}
+                      onChange={(e) => setSearchQuery(e.target.value)}
+                      placeholder="e.g. Find reports with low hemoglobin or abnormal kidney tests"
+                      className="w-full bg-[#0d1527] border border-slate-800 focus:border-sky-500 rounded-xl px-4 py-3 text-white placeholder-slate-500 focus:outline-none transition-all text-sm"
+                    />
+                    {searching && (
+                      <span className="absolute right-4 top-3.5 w-4 h-4 border-2 border-sky-400 border-t-transparent rounded-full animate-spin"></span>
+                    )}
+                  </div>
+                  <button type="submit" className="bg-sky-600 hover:bg-sky-700 text-white px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-md shadow-sky-500/10 shrink-0">
+                    Execute Query
+                  </button>
+                </form>
+
+                <div className="space-y-6 max-w-4xl">
+                  {/* Keyword matches */}
+                  <div>
+                    <h3 className="text-sm font-bold uppercase tracking-wider mb-3 text-slate-400 flex items-center gap-2">
+                      <svg className="w-4.5 h-4.5 text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 20l4-16m2 16l4-16" />
+                      </svg>
+                      <span>Keyword Matches (FTS5 Index)</span>
+                    </h3>
+                    {searchResults.keyword_results.length === 0 ? (
+                      <p className="text-slate-500 text-xs italic bg-slate-900/10 p-3 rounded-lg border border-slate-900/40">No matching keyword records found.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {searchResults.keyword_results.map(r => (
+                          <div key={r.id} className="glass-card p-4 rounded-xl flex justify-between items-center border border-slate-800/40">
+                            <div>
+                              <div className="font-bold text-white text-sm">{r.patient_name} — {r.report_type.toUpperCase()}</div>
+                              <div className="text-[11px] text-slate-500 mt-0.5">{r.hospital || r.doctor || 'Clinic'} | {r.report_date}</div>
+                              {r.snippet && <div className="text-xs text-sky-400 mt-2 bg-sky-950/20 p-2 rounded border border-sky-900/30 italic font-semibold">"{r.snippet}"</div>}
+                            </div>
+                            <button onClick={() => loadReportDetail(r.id)} className="text-sky-400 hover:text-sky-300 text-xs font-bold transition-all hover:underline shrink-0">View Report</button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Semantic matches */}
+                  <div>
+                    <h3 className="text-sm font-bold uppercase tracking-wider mb-3 text-slate-400 flex items-center gap-2">
+                      <svg className="w-4.5 h-4.5 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                      <span>Neural Similarity Matches (all-MiniLM)</span>
+                    </h3>
+                    {searchResults.semantic_results.length === 0 ? (
+                      <p className="text-slate-500 text-xs italic bg-slate-900/10 p-3 rounded-lg border border-slate-900/40">No semantic database connections matched this query.</p>
+                    ) : (
+                      <div className="space-y-3">
+                        {searchResults.semantic_results.map(r => (
+                          <div key={r.id} className="glass-card p-4 rounded-xl flex justify-between items-center border border-slate-800/40">
+                            <div>
+                              <div className="font-bold text-white text-sm">{r.patient_name} — {r.report_type.toUpperCase()}</div>
+                              <div className="text-[11px] text-slate-500 mt-0.5">{r.hospital || r.doctor || 'Clinic'} | {r.report_date}</div>
+                              {r.snippet && <div className="text-xs text-slate-400 mt-2 italic line-clamp-2">"... {r.snippet.replace(/\n/g, ' ')} ..."</div>}
+                            </div>
+                            <div className="text-right shrink-0">
+                              <span className="text-[10px] font-bold bg-emerald-950/60 text-emerald-400 px-2 py-0.5 rounded border border-emerald-900 mr-4">
+                                Match: {Math.round(r.similarity * 100)}%
+                              </span>
+                              <button onClick={() => loadReportDetail(r.id)} className="text-sky-400 hover:text-sky-300 text-xs font-bold transition-all hover:underline">View Report</button>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Export Tab */}
+            {currentTab === 'export' && (
+              <div className="space-y-8 animate-fade-in">
+                <header className="mb-8">
+                  <h2 className="text-3xl font-extrabold text-white tracking-tight">Export & Database Backup</h2>
+                  <p className="text-slate-400 mt-1">Create portable database backups and CSV extracts offline.</p>
+                </header>
+
+                <div className="glass-panel rounded-2xl p-8 max-w-2xl border border-slate-800/40">
+                  <h3 className="text-lg font-bold mb-3 text-white">Download Offline Datastore</h3>
+                  <p className="text-slate-400 text-sm leading-relaxed mb-4">
+                    Your medical datastore is securely isolated locally in an offline SQLite database file. No external internet access is required.
+                  </p>
+                  <p className="text-slate-400 text-sm leading-relaxed mb-6">
+                    Export your values as structural JSON formats for application backups, or structured Excel-friendly CSV tables to share direct lab findings with your GP or physician.
+                  </p>
+                  
+                  <div className="flex gap-4">
+                    <button 
+                      onClick={() => handleExport('json')}
+                      className="bg-sky-600 hover:bg-sky-700 text-white px-6 py-3 rounded-xl font-bold text-sm transition-all shadow-md shadow-sky-500/10">
+                      Backup as JSON
+                    </button>
+                    <button 
+                      onClick={() => handleExport('csv')}
+                      className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-6 py-3 rounded-xl font-bold text-sm border border-slate-700/60 transition-all">
+                      Export to Excel CSV
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Report Detail Modal */}
+            {selectedReport && (
+              <div className="fixed inset-0 bg-black/85 flex items-center justify-center p-4 z-50 animate-fade-in">
+                <div className="bg-[#0b0f19] border border-slate-800/80 rounded-2xl w-full max-w-4xl max-h-[85vh] flex flex-col shadow-2xl">
+                  <header className="p-6 border-b border-slate-800/60 flex justify-between items-center bg-[#0d1527] rounded-t-2xl">
+                    <div>
+                      <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                        <svg className="w-5 h-5 text-sky-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                        </svg>
+                        <span>Diagnostic Report Summary</span>
+                      </h3>
+                      <p className="text-xs text-slate-400 mt-1">{selectedReport.report.patient_name} — {selectedReport.report.report_date}</p>
+                    </div>
+                    <button onClick={() => { setSelectedReport(null); setReportSummary(null); }} className="text-slate-400 hover:text-white font-bold text-2xl p-1">&times;</button>
+                  </header>
+
+                  <div className="p-6 overflow-y-auto space-y-6">
+                    {/* Metadata Header */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4 bg-[#0d1527]/60 p-4 rounded-xl text-xs border border-slate-800/50">
+                      <div>
+                        <span className="text-slate-500 block font-semibold uppercase tracking-wider text-[9px]">Hospital / Lab</span>
+                        <span className="text-white font-bold text-sm">{selectedReport.report.hospital || 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block font-semibold uppercase tracking-wider text-[9px]">Prescribing Doctor</span>
+                        <span className="text-white font-bold text-sm">{selectedReport.report.doctor || 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block font-semibold uppercase tracking-wider text-[9px]">Collected Date</span>
+                        <span className="text-white font-bold text-sm">{selectedReport.report.report_date || 'N/A'}</span>
+                      </div>
+                      <div>
+                        <span className="text-slate-500 block font-semibold uppercase tracking-wider text-[9px]">Record Type</span>
+                        <span className="text-white font-bold text-sm capitalize">{selectedReport.report.report_type}</span>
+                      </div>
+                    </div>
+
+                    {/* Offline AI Summary Panel */}
+                    {loadingSummary ? (
+                      <div className="p-5 bg-sky-950/10 border border-sky-900/30 rounded-xl flex items-center justify-center gap-3">
+                        <span className="w-4 h-4 border-2 border-sky-400 border-t-transparent rounded-full animate-spin"></span>
+                        <span className="text-xs text-sky-300 font-bold">Synthesizing clinical findings...</span>
+                      </div>
+                    ) : reportSummary ? (
+                      <div className="p-5 bg-sky-950/10 border border-sky-900/30 rounded-xl space-y-4 animate-fade-in">
+                        <h4 className="text-sm font-bold text-sky-400 flex items-center gap-2">
+                          <svg className="w-5 h-5 animate-pulse" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
+                          </svg>
+                          <span>Offline MedVault AI Assessment</span>
+                        </h4>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
+                          <div>
+                            <span className="font-bold text-slate-400 block mb-1">⚠️ Abnormal Findings:</span>
+                            <p className="text-slate-300 leading-relaxed bg-[#0b0f19] p-3 rounded-lg border border-slate-800/80">{reportSummary.abnormal_findings}</p>
+                          </div>
+                          <div>
+                            <span className="font-bold text-slate-400 block mb-1">✅ Normal Findings:</span>
+                            <p className="text-slate-300 leading-relaxed bg-[#0b0f19] p-3 rounded-lg border border-slate-800/80 line-clamp-3 hover:line-clamp-none transition-all">{reportSummary.normal_findings}</p>
+                          </div>
+                        </div>
+                        
+                        <div className="text-xs">
+                          <span className="font-bold text-slate-400 block mb-1">📈 Historical Trend Tracking:</span>
+                          <p className="text-slate-300 leading-relaxed bg-[#0b0f19] p-3 rounded-lg border border-slate-800/80">{reportSummary.historical_trends}</p>
+                        </div>
+                        
+                        <div className="p-3 bg-amber-950/20 border border-amber-900/40 rounded-lg text-[10px] text-amber-300 leading-relaxed flex items-start gap-2">
+                          <svg className="w-5 h-5 text-amber-400 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                          </svg>
+                          <span>{reportSummary.clinical_disclaimer}</span>
+                        </div>
+                      </div>
+                    ) : null}
+
+                    {/* Results Table */}
+                    {selectedReport.results && selectedReport.results.length > 0 && (
+                      <div>
+                        <h4 className="font-bold text-slate-300 mb-3 text-xs uppercase tracking-wider">Extracted Test Metrics</h4>
+                        <div className="border border-slate-800/60 rounded-xl overflow-hidden">
+                          <table className="w-full text-left border-collapse text-xs">
+                            <thead>
+                              <tr className="bg-[#0d1527] text-slate-400 font-semibold border-b border-slate-800/60">
+                                <th className="p-3">Test Name</th>
+                                <th className="p-3">Value</th>
+                                <th className="p-3">Unit</th>
+                                <th className="p-3">Healthy Reference Range</th>
+                                <th className="p-3 text-right">Status Flag</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {selectedReport.results.map(r => (
+                                <tr key={r.id} className="border-b border-slate-800/40 hover:bg-slate-800/10 transition-all">
+                                  <td className="p-3 text-white font-bold">{r.test_name}</td>
+                                  <td className="p-3 text-slate-300 font-semibold">{r.value}</td>
+                                  <td className="p-3 text-slate-400">{r.unit}</td>
+                                  <td className="p-3 text-slate-400">{r.reference_range_low} - {r.reference_range_high}</td>
+                                  <td className="p-3 text-right">
+                                    <span className={`px-2 py-0.5 rounded-md text-[9px] font-bold border uppercase tracking-wider ${
+                                      r.flag === 'normal' ? 'bg-emerald-950/60 text-emerald-400 border-emerald-900/60' : 
+                                      r.flag === 'high' ? 'bg-amber-950/60 text-amber-400 border-amber-900/60' : 
+                                      r.flag === 'low' ? 'bg-sky-950/60 text-sky-400 border-sky-900/60' : 
+                                      'bg-rose-950/60 text-rose-400 border-rose-900/60'
+                                    }`}>
+                                      {r.flag}
+                                    </span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Medications */}
+                    {selectedReport.medications && selectedReport.medications.length > 0 && (
+                      <div>
+                        <h4 className="font-bold text-slate-300 mb-3 text-xs uppercase tracking-wider">Prescribed Medications</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {selectedReport.medications.map(m => (
+                            <div key={m.id} className="bg-[#0d1527] p-4 rounded-xl border border-slate-800/80 flex items-center justify-between">
+                              <div>
+                                <div className="font-bold text-sky-400 text-sm">{m.medicine_name}</div>
+                                <div className="text-[11px] text-slate-400 mt-1">Dosage: {m.dosage || 'N/A'} | Freq: {m.frequency || 'N/A'}</div>
+                                {m.duration && <div className="text-[11px] text-slate-500 mt-0.5">Duration: {m.duration}</div>}
+                              </div>
+                              <span className="p-2 rounded-lg bg-sky-500/10 border border-sky-500/20 text-sky-400">
+                                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19.428 15.428a2 2 0 00-1.022-.547l-2.387-.477a6 6 0 00-3.86.517l-.318.158a6 6 0 01-3.86.517L6.05 15.21a2 2 0 00-1.806.547M8 4h8l-1 1v5.172a2 2 0 00.586 1.414l5 5c1.26 1.26.367 3.414-1.415 3.414H4.828c-1.782 0-2.674-2.154-1.414-3.414l5-5A2 2 0 009 10.172V5L8 4z" />
+                                </svg>
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Raw OCR Text */}
+                    <div>
+                      <h4 className="font-bold text-slate-300 mb-3 text-xs uppercase tracking-wider">Raw Extracted Document Text</h4>
+                      <pre className="bg-[#070b13] p-4 rounded-xl text-[10px] text-slate-500 overflow-x-auto max-h-48 border border-slate-800/60 whitespace-pre-wrap">{selectedReport.report.raw_ocr_text}</pre>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </main>
+        </div>
+      );
+    }
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>

@@ -11,6 +11,11 @@ bin/
 build/
 develop-eggs/
 dist/
+# Exception: include the pre-built frontend dist for deployment
+!frontend/dist/
+!frontend/dist/**
+!frontend/static/
+!frontend/static/**
 downloads/
 eggs/
 .eggs/
