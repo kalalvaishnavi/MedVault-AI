@@ -23,10 +23,12 @@ from app.ocr.extractor import extract_text_from_pdf, extract_text_from_image
 from app.llm.extractor import LocalLLMExtractor
 from app.analysis.flag_detector import detect_abnormal_flag
 
-# Setup directories
+# Setup directories - use absolute paths that work on both local and cloud (Render)
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-UPLOAD_DIR = os.path.join(BASE_DIR, "../../uploads")
-DB_PATH = os.path.join(BASE_DIR, "../../medvault.db")
+# Allow overriding via environment variables for cloud deployments
+ROOT_DIR = os.environ.get("APP_ROOT", os.path.join(BASE_DIR, "..", ".."))
+UPLOAD_DIR = os.path.join(ROOT_DIR, "uploads")
+DB_PATH = os.path.join(ROOT_DIR, "medvault.db")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 # Run DB Migrations at Startup

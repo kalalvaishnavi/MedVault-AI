@@ -1,0 +1,12 @@
+fastapi==0.136.3
+uvicorn==0.48.0
+pydantic==2.13.4
+pytesseract==0.3.13
+pdfminer.six==20260107
+pdfplumber==0.11.10
+pymupdf==1.27.2.3
+Pillow==12.2.0
+numpy==2.2.6
+scikit-learn==1.7.2
+sentence-transformers
+python-multipart==0.0.32
