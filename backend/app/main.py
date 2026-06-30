@@ -632,10 +632,22 @@ def export_reports(format: str = "json"):
     return JSONResponse(content=rows)
 
 # Serve build assets of the React frontend if built
-FRONTEND_STATIC = os.path.join(BASE_DIR, "../../frontend/static")
+# Use ROOT_DIR so paths resolve correctly on both local and cloud deployments
+FRONTEND_STATIC = os.path.join(ROOT_DIR, "frontend", "static")
 if os.path.exists(FRONTEND_STATIC):
     app.mount("/static", StaticFiles(directory=FRONTEND_STATIC), name="static")
 
-FRONTEND_DIST = os.path.join(BASE_DIR, "../../frontend/dist")
+FRONTEND_DIST = os.path.join(ROOT_DIR, "frontend", "dist")
 if os.path.exists(FRONTEND_DIST):
     app.mount("/", StaticFiles(directory=FRONTEND_DIST, html=True), name="frontend")
+else:
+    from fastapi.responses import HTMLResponse
+    @app.get("/", response_class=HTMLResponse)
+    async def root():
+        return """
+        <html><body style='font-family:sans-serif;text-align:center;padding:60px;background:#0f172a;color:#e2e8f0'>
+        <h1 style='color:#38bdf8'>MedVault AI</h1>
+        <p>Backend API is running successfully.</p>
+        <p><a href='/docs' style='color:#38bdf8'>View API Documentation →</a></p>
+        </body></html>
+        """
